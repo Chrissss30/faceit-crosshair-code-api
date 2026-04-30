@@ -176,9 +176,12 @@ async function refreshFaceitCookie() {
 
     // FACEIT redirects login to accounts.faceit.com
     await page.goto(`${FACEIT_WEB_BASE_URL}/en/login`, {
-      waitUntil: "networkidle",
+      waitUntil: "domcontentloaded",
       timeout: REQUEST_TIMEOUT_MS,
     });
+
+    // Extra wait for JS to render the login form
+    await page.waitForTimeout(4000);
 
     // The login form may be on accounts.faceit.com after redirect
     // Try main frame first, then look inside any frames
