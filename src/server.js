@@ -27,6 +27,10 @@ const FACEIT_WEB_USE_CURL_FALLBACK = String(process.env.FACEIT_WEB_USE_CURL_FALL
 const FACEIT_WEB_BROWSER_FALLBACK = String(process.env.FACEIT_WEB_BROWSER_FALLBACK || "1") === "1";
 const FACEIT_WEB_COOKIE = process.env.FACEIT_WEB_COOKIE || "";
 const FACEIT_WEB_COOKIE_FILE = process.env.FACEIT_WEB_COOKIE_FILE || "";
+const FACEIT_USERNAME = process.env.FACEIT_USERNAME || "";
+const FACEIT_PASSWORD = process.env.FACEIT_PASSWORD || "";
+const COOKIE_AUTO_REFRESH = String(process.env.COOKIE_AUTO_REFRESH || "1") === "1";
+const COOKIE_REFRESH_SECRET = process.env.COOKIE_REFRESH_SECRET || "";
 const FACEIT_WEB_STATS_URLS = parseCsv(process.env.FACEIT_WEB_STATS_URLS || "");
 const BROWSER_EXECUTABLE_PATH = process.env.BROWSER_EXECUTABLE_PATH || "";
 const BROWSER_USER_DATA_DIR = process.env.BROWSER_USER_DATA_DIR || "data/browser-profile";
@@ -39,7 +43,12 @@ const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30000);
 const MAX_DEMO_BYTES = Number(process.env.MAX_DEMO_BYTES || 800_000_000);
 const ZSTD_PATH = process.env.ZSTD_PATH || "zstd.exe";
 const DEMO_PARSER_COMMAND = process.env.DEMO_PARSER_COMMAND || "";
+const CURL_CMD = process.platform === "win32" ? "curl.exe" : "curl";
 const CROSSHAIR_RE = /CSGO(?:-[A-Za-z0-9]{5}){5}/g;
+const ENV_FILE = path.join(ROOT_DIR, ".env");
+
+// Dynamic cookie state — updated at runtime by auto-refresh
+let dynamicCookie = "";
 
 const app = express();
 app.disable("x-powered-by");
@@ -68,7 +77,7 @@ app.get("/api/crosshair/:nickname", async (req, res) => {
   try {
     const nickname = String(req.params.nickname || "").trim();
     if (!nickname) {
-      return sendTextError(res, 400, "nickname_invalido");
+      return res.type("text/plain").send("Nickname não informado.");
     }
 
     const result = await getCrosshairCodeForNickname(nickname, {
@@ -98,13 +107,159 @@ app.get("/api/crosshair/:nickname", async (req, res) => {
       });
     }
 
-    sendTextError(res, error.status || 502, error.code || "falha_ao_buscar_crosshair");
+    const friendlyMessage = getFriendlyErrorMessage(error.code, error.status);
+    res.status(error.status || 502).type("text/plain").send(friendlyMessage);
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`FACEIT Crosshair Code API em http://localhost:${PORT}`);
+function getFriendlyErrorMessage(code, status) {
+  const messages = {
+    nickname_invalido: "Nickname não informado.",
+    faceit_api_key_ausente: "Erro de configuração da API.",
+    partida_nao_encontrada: "Nenhuma partida recente encontrada para esse jogador.",
+    crosshair_nao_encontrada: "Crosshair não encontrada na última partida.",
+    demo_download_falhou: "Falha ao baixar a demo da partida.",
+    demo_muito_grande: "Demo muito grande para processar.",
+    faceit_http_error: status === 404 ? "Jogador não encontrado no FACEIT." : "Erro ao acessar a API do FACEIT.",
+    faceit_network_error: "Não foi possível conectar ao FACEIT. Tente novamente.",
+  };
+  return messages[code] || "Não foi possível buscar a crosshair. Tente novamente mais tarde.";
+}
+
+app.get("/api/refresh-cookie", async (req, res) => {
+  // Protect the endpoint with a secret if configured
+  if (COOKIE_REFRESH_SECRET && req.query.secret !== COOKIE_REFRESH_SECRET) {
+    return res.status(401).json({ ok: false, error: "nao_autorizado" });
+  }
+
+  if (!FACEIT_USERNAME || !FACEIT_PASSWORD) {
+    return res.status(500).json({
+      ok: false,
+      error: "credenciais_ausentes",
+      message: "Configure FACEIT_USERNAME e FACEIT_PASSWORD no .env.",
+    });
+  }
+
+  try {
+    console.log("[cookie_refresh] Iniciando login automatico no FACEIT...");
+    const cookie = await refreshFaceitCookie();
+    console.log("[cookie_refresh] Cookie atualizado com sucesso. Length:", cookie.length);
+    res.json({ ok: true, cookieLength: cookie.length, refreshedAt: new Date().toISOString() });
+  } catch (error) {
+    console.error("[cookie_refresh:error]", error.message);
+    res.status(502).json({ ok: false, error: "falha_no_refresh", message: error.message });
+  }
 });
+
+async function refreshFaceitCookie() {
+  let chromium;
+  try {
+    ({ chromium } = await import("playwright-core"));
+  } catch {
+    throw new Error("playwright-core nao instalado. Execute: npm install playwright-core");
+  }
+
+  const userDataDir = path.isAbsolute(BROWSER_USER_DATA_DIR)
+    ? BROWSER_USER_DATA_DIR
+    : path.join(ROOT_DIR, BROWSER_USER_DATA_DIR);
+  await fs.mkdir(userDataDir, { recursive: true });
+
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    headless: true,
+    executablePath: BROWSER_EXECUTABLE_PATH || undefined,
+    userAgent: FACEIT_WEB_USER_AGENT,
+    args: ["--disable-blink-features=AutomationControlled", "--no-sandbox", "--disable-setuid-sandbox"],
+  });
+
+  try {
+    const page = await context.newPage();
+
+    // Go to login page
+    await page.goto(`${FACEIT_WEB_BASE_URL}/en/login`, {
+      waitUntil: "domcontentloaded",
+      timeout: REQUEST_TIMEOUT_MS,
+    });
+
+    // Wait for and fill email/username
+    await page.waitForSelector('input[name="email"], input[type="email"], input[placeholder*="email" i], input[placeholder*="username" i]', {
+      timeout: 15000,
+    });
+    await page.fill('input[name="email"], input[type="email"], input[placeholder*="email" i], input[placeholder*="username" i]', FACEIT_USERNAME);
+
+    // Fill password
+    await page.fill('input[name="password"], input[type="password"]', FACEIT_PASSWORD);
+
+    // Click login button
+    await page.click('button[type="submit"], button:has-text("Log in"), button:has-text("Login"), button:has-text("Sign in")');
+
+    // Wait for redirect after login
+    await page.waitForURL((url) => !url.toString().includes("/login"), {
+      timeout: 20000,
+    }).catch(() => {});
+
+    // Give time for session cookies to be set
+    await page.waitForTimeout(3000);
+
+    // Extract all cookies
+    const cookies = await context.cookies("https://www.faceit.com");
+    const cookieHeader = cookies
+      .filter((c) => c.domain.includes("faceit.com"))
+      .map((c) => `${c.name}=${c.value}`)
+      .join("; ");
+
+    if (!cookieHeader) {
+      throw new Error("Nenhum cookie encontrado apos login. Verifique as credenciais.");
+    }
+
+    // Update runtime state
+    dynamicCookie = cookieHeader;
+
+    // Persist to .env file
+    await updateEnvFile("FACEIT_WEB_COOKIE", cookieHeader);
+
+    return cookieHeader;
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+async function updateEnvFile(key, value) {
+  let content = "";
+  try {
+    content = await fs.readFile(ENV_FILE, "utf8");
+  } catch {
+    // .env doesn't exist yet, will create
+  }
+
+  const escapedValue = value.replace(/\n/g, "\\n");
+  const newLine = `${key}=${escapedValue}`;
+  const keyRegex = new RegExp(`^${key}=.*$`, "m");
+
+  if (keyRegex.test(content)) {
+    content = content.replace(keyRegex, newLine);
+  } else {
+    content = content.trimEnd() + `\n${newLine}\n`;
+  }
+
+  await fs.writeFile(ENV_FILE, content, "utf8");
+}
+
+// Schedule auto-refresh every 7 days if credentials are configured
+if (COOKIE_AUTO_REFRESH && FACEIT_USERNAME && FACEIT_PASSWORD) {
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  setTimeout(async () => {
+    try {
+      console.log("[cookie_refresh:auto] Renovando cookie automaticamente...");
+      await refreshFaceitCookie();
+      console.log("[cookie_refresh:auto] Cookie renovado com sucesso.");
+    } catch (error) {
+      console.error("[cookie_refresh:auto:error]", error.message);
+    }
+  }, SEVEN_DAYS_MS);
+  console.log("[cookie_refresh:auto] Agendado para renovar em 7 dias.");
+}
+
+
 
 async function getCrosshairCodeForNickname(nickname, { refresh = false, debug = false } = {}) {
   const steps = [];
@@ -420,7 +575,7 @@ async function fetchFaceitWebTextWithCurl(url, { matchId, fetchError }) {
   args.push(url);
 
   try {
-    return await runCommand("curl.exe", args);
+    return await runCommand(CURL_CMD, args);
   } catch (curlError) {
     throw new Error(`fetch=${fetchError.message || "erro"}; curl=${curlError.message || "erro"}`);
   }
@@ -564,7 +719,7 @@ async function downloadDemo(demoUrl, { nickname, matchId }) {
 }
 
 async function downloadDemoWithCurl(demoUrl, filePath) {
-  await runCommand("curl.exe", [
+  await runCommand(CURL_CMD, [
     "-L",
     "--fail",
     "--silent",
@@ -842,6 +997,8 @@ function parseCsv(value) {
 }
 
 function getFaceitWebCookie() {
+  // Priority: runtime refreshed cookie > env var > cookie file
+  if (dynamicCookie.trim()) return normalizeCookieHeader(dynamicCookie);
   if (FACEIT_WEB_COOKIE.trim()) return normalizeCookieHeader(FACEIT_WEB_COOKIE);
   if (!FACEIT_WEB_COOKIE_FILE.trim()) return "";
 
