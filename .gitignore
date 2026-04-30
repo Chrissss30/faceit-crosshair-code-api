@@ -1,0 +1,7 @@
+node_modules/
+.env
+data/demos/
+data/cache.json
+data/faceit-cookie.txt
+data/browser-profile/
+npm-debug.log*
