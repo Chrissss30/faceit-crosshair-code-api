@@ -174,34 +174,57 @@ async function refreshFaceitCookie() {
   try {
     const page = await context.newPage();
 
-    // Go to login page
+    // FACEIT redirects login to accounts.faceit.com
     await page.goto(`${FACEIT_WEB_BASE_URL}/en/login`, {
-      waitUntil: "domcontentloaded",
+      waitUntil: "networkidle",
       timeout: REQUEST_TIMEOUT_MS,
     });
 
-    // Wait for and fill email/username
-    await page.waitForSelector('input[name="email"], input[type="email"], input[placeholder*="email" i], input[placeholder*="username" i]', {
-      timeout: 15000,
-    });
-    await page.fill('input[name="email"], input[type="email"], input[placeholder*="email" i], input[placeholder*="username" i]', FACEIT_USERNAME);
+    // The login form may be on accounts.faceit.com after redirect
+    // Try main frame first, then look inside any frames
+    const fillLoginForm = async (frame) => {
+      try {
+        await frame.waitForSelector('input[type="email"], input[type="text"][autocomplete*="email"], input[type="text"][autocomplete*="username"]', {
+          timeout: 8000,
+        });
+        await frame.fill('input[type="email"], input[type="text"][autocomplete*="email"], input[type="text"][autocomplete*="username"]', FACEIT_USERNAME);
+        await frame.waitForSelector('input[type="password"]', { timeout: 5000 });
+        await frame.fill('input[type="password"]', FACEIT_PASSWORD);
+        await frame.click('button[type="submit"]');
+        return true;
+      } catch {
+        return false;
+      }
+    };
 
-    // Fill password
-    await page.fill('input[name="password"], input[type="password"]', FACEIT_PASSWORD);
+    // Try main page first
+    let loggedIn = await fillLoginForm(page);
 
-    // Click login button
-    await page.click('button[type="submit"], button:has-text("Log in"), button:has-text("Login"), button:has-text("Sign in")');
+    // If not found, try iframes
+    if (!loggedIn) {
+      for (const frame of page.frames()) {
+        if (frame === page.mainFrame()) continue;
+        loggedIn = await fillLoginForm(frame);
+        if (loggedIn) break;
+      }
+    }
 
-    // Wait for redirect after login
-    await page.waitForURL((url) => !url.toString().includes("/login"), {
-      timeout: 20000,
+    if (!loggedIn) {
+      // Take a screenshot for debugging
+      await page.screenshot({ path: path.join(DATA_DIR, "login-debug.png") });
+      throw new Error(`Formulario de login nao encontrado. URL atual: ${page.url()}. Screenshot salvo em data/login-debug.png`);
+    }
+
+    // Wait for redirect back to faceit.com after login
+    await page.waitForURL((url) => url.toString().includes("faceit.com") && !url.toString().includes("accounts.faceit.com"), {
+      timeout: 25000,
     }).catch(() => {});
 
     // Give time for session cookies to be set
     await page.waitForTimeout(3000);
 
-    // Extract all cookies
-    const cookies = await context.cookies("https://www.faceit.com");
+    // Extract cookies from both domains
+    const cookies = await context.cookies(["https://www.faceit.com", "https://accounts.faceit.com"]);
     const cookieHeader = cookies
       .filter((c) => c.domain.includes("faceit.com"))
       .map((c) => `${c.name}=${c.value}`)
