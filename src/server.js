@@ -108,7 +108,7 @@ app.get("/api/crosshair/:nickname", async (req, res) => {
     }
 
     const friendlyMessage = getFriendlyErrorMessage(error.code, error.status);
-    res.status(error.status || 502).type("text/plain").send(friendlyMessage);
+    res.status(200).type("text/plain").send(friendlyMessage);
   }
 });
 
