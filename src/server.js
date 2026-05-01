@@ -1089,6 +1089,7 @@ function attachDebug(error, steps) {
   error.debug = { steps };
   return error;
 }
- 
- a p p . l i s t e n ( P O R T ,   ( )   = >   {   c o n s o l e . l o g ( ' F A C E I T   C r o s s h a i r   C o d e   A P I   e m   h t t p : / / l o c a l h o s t : '   +   P O R T ) ;   } ) ;  
- 
+
+app.listen(PORT, () => {
+  console.log(`FACEIT Crosshair Code API em http://localhost:${PORT}`);
+});
