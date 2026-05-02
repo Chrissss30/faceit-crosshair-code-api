@@ -120,8 +120,8 @@ function getFriendlyErrorMessage(code, status) {
     crosshair_nao_encontrada: "Crosshair não encontrada na última partida.",
     demo_download_falhou: "Falha ao baixar a demo da partida.",
     demo_muito_grande: "Demo muito grande para processar.",
-    faceit_http_error: status === 404 ? "Jogador não encontrado no FACEIT." : "Erro ao acessar a API do FACEIT.",
-    faceit_network_error: "Não foi possível conectar ao FACEIT. Tente novamente.",
+    faceit_http_error: status === 404 ? "Jogador não encontrado na FACEIT." : "Erro ao acessar a API da FACEIT.",
+    faceit_network_error: "Não foi possível conectar a FACEIT. Tente novamente.",
   };
   return messages[code] || "Não foi possível buscar a crosshair. Tente novamente mais tarde.";
 }
