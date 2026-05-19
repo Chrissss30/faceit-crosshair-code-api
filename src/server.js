@@ -429,22 +429,53 @@ async function getCrosshairCodeForNickname(nickname, { refresh = false, debug = 
 }
 
 async function fetchCrosshairFromMatchStatsPlayers(matchId, player) {
-  // The public FACEIT stats API returns player-level data including crosshair codes
-  // in the rounds > teams > players array. Try to extract it for the specific player.
   try {
     const stats = await fetchFaceitJson(`/matches/${matchId}/stats`);
+
     const playerId = player?.player_id;
     const nickname = normalizeComparable(player?.nickname);
 
+    // FORMATO NOVO
+    const payloadTeams = stats?.payload?.teams || [];
+
+    for (const team of payloadTeams) {
+      const players = team?.players || [];
+
+      for (const p of players) {
+        const isTarget =
+          (playerId && (p?.playerId === playerId || p?.player_id === playerId)) ||
+          (nickname &&
+            normalizeComparable(
+              p?.nickname || p?.nickName
+            ) === nickname);
+
+        if (!isTarget) continue;
+
+        const code =
+          getStringCrosshair(p?.crosshair) ||
+          getStringCrosshair(p?.crosshairCode) ||
+          getStringCrosshair(p?.crosshair_code) ||
+          extractCrosshairCode(JSON.stringify(p));
+
+        if (code) return code;
+      }
+    }
+
+    // FORMATO ANTIGO (fallback)
     const rounds = stats?.rounds || [];
+
     for (const round of rounds) {
       const teams = round?.teams || [];
+
       for (const team of teams) {
         const players = team?.players || [];
+
         for (const p of players) {
           const isTarget =
             (playerId && p?.player_id === playerId) ||
-            (nickname && normalizeComparable(p?.nickname) === nickname);
+            (nickname &&
+              normalizeComparable(p?.nickname) === nickname);
+
           if (!isTarget) continue;
 
           const code =
@@ -452,16 +483,17 @@ async function fetchCrosshairFromMatchStatsPlayers(matchId, player) {
             getStringCrosshair(p?.crosshairCode) ||
             getStringCrosshair(p?.crosshair_code) ||
             extractCrosshairCode(JSON.stringify(p));
+
           if (code) return code;
         }
       }
     }
-  } catch {
-    // Not available or no crosshair field — continue to other methods.
+  } catch (err) {
+    console.log("fetchCrosshairFromMatchStatsPlayers error:", err);
   }
+
   return "";
 }
-
 async function fetchLatestMatch(playerId) {
   for (const game of ["cs2", "csgo"]) {
     const history = await fetchFaceitJson(`/players/${playerId}/history?game=${game}&offset=0&limit=20`).catch(
