@@ -581,6 +581,7 @@ function buildFaceitWebStatsUrls({ matchId, matchDetails, latestMatch }) {
   const officialRoomUrl = findFaceitRoomUrl(matchDetails) || findFaceitRoomUrl(latestMatch);
   const templates = [
     ...FACEIT_WEB_STATS_URLS,
+    `${FACEIT_WEB_BASE_URL}/api/statistics/v1/cs2/matches/{matchId}/match-rounds/1/scoreboard-summary?statsType=2`,
     `${FACEIT_WEB_BASE_URL}/api/statistics/v1/cs2/matches/{matchId}/match-rounds/1/scoreboard-summary`,
     `${FACEIT_WEB_BASE_URL}/api/stats/v1/stats/matches/{matchId}`,
     `${FACEIT_WEB_BASE_URL}/api/stats/v1/stats/matches/{matchId}/scoreboard`,
