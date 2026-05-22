@@ -53,6 +53,37 @@ let dynamicCookie = "";
 const app = express();
 app.disable("x-powered-by");
 
+// Proxy route — repassa requisições para o FACEIT com cookie
+app.get("/proxy/*", async (req, res) => {
+  const proxyPath = req.path.replace(/^\/proxy/, "");
+  const query = req.url.includes("?") ? "?" + req.url.split("?")[1] : "";
+  const targetUrl = `${FACEIT_WEB_BASE_URL}${proxyPath}${query}`;
+  const cookie = getFaceitWebCookie();
+
+  if (!cookie) {
+    return res.status(500).json({ ok: false, error: "FACEIT_COOKIE nao configurado" });
+  }
+
+  try {
+    const response = await fetch(targetUrl, {
+      headers: {
+        "cookie": cookie,
+        "user-agent": FACEIT_WEB_USER_AGENT,
+        "accept": "application/json, text/plain, */*",
+        "accept-language": "pt-BR,pt;q=0.9,en;q=0.8",
+        "referer": "https://www.faceit.com/",
+        "origin": "https://www.faceit.com",
+      },
+    });
+    const body = await response.text();
+    res.status(response.status)
+      .type(response.headers.get("content-type") || "application/json")
+      .send(body);
+  } catch (error) {
+    res.status(502).json({ ok: false, error: error.message });
+  }
+});
+
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
@@ -581,7 +612,6 @@ function buildFaceitWebStatsUrls({ matchId, matchDetails, latestMatch }) {
   const officialRoomUrl = findFaceitRoomUrl(matchDetails) || findFaceitRoomUrl(latestMatch);
   const templates = [
     ...FACEIT_WEB_STATS_URLS,
-    `${FACEIT_WEB_BASE_URL}/api/statistics/v1/cs2/matches/{matchId}/match-rounds/1/scoreboard-summary?statsType=2`,
     `${FACEIT_WEB_BASE_URL}/api/statistics/v1/cs2/matches/{matchId}/match-rounds/1/scoreboard-summary`,
     `${FACEIT_WEB_BASE_URL}/api/stats/v1/stats/matches/{matchId}`,
     `${FACEIT_WEB_BASE_URL}/api/stats/v1/stats/matches/{matchId}/scoreboard`,
